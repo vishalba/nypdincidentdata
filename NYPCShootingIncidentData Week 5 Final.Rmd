@@ -1,0 +1,105 @@
+---
+title: "NYPDShootingIncidentData"
+author: "Me"
+date: "2022-11-27"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Purpose
+
+The purpose of this exercise is to dig into the historical NYPD Shooting Incident data and come up with insights. In NYC, all of the shooting incidents since 2006 have been records, so we have thousands of instances to comb through. 
+
+##Step 1 Dataset Location and Library calls
+
+```{r get_nypd_incident_data, message = FALSE}
+# These are the libraries that we will need to use
+library(tidyverse)
+library(lubridate)
+
+# This is the link to the CSV file
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+```
+
+## Step 1: Import Dataset into R Interface 
+
+```{r import_data, message = FALSE}
+nypd_shooting_incidents_data <- read_csv(url_in)
+```
+
+## Look at Structure and Summary of Dataset
+
+```{r dataset_structure}
+glimpse(nypd_shooting_incidents_data)
+summary(nypd_shooting_incidents_data)
+# Thoughts: Looking at the structure and summaries, I concluded that there's several columns in the dataset that I don't need for the exploratory analysis that I will conduct
+```
+
+## Clean-up and Transform Dataset
+
+### Step 2: Remove Unnecessary Fields and Transform Fields
+```{r clean_transform_fields}
+# I am removing several fields: X_COORD_CS, Y_COORD_CD, Latitude, Longitude, Lon_Lat, Jurisdiction_Code, Location_Desc, Precinct to tidy up the dataset since I don't think they are necessary for the analysis I am planning
+nypd_shooting_incidents_data <- select(nypd_shooting_incidents_data, -c(X_COORD_CD, Y_COORD_CD, Latitude, Longitude, Lon_Lat, PRECINCT, JURISDICTION_CODE, LOCATION_DESC))
+
+# I am transforming the data type of the OCCUR_DATE field from character to date format. 
+nypd_shooting_incidents_data <- nypd_shooting_incidents_data %>% mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+summary(nypd_shooting_incidents_data)
+
+# After looking at the summary, I decided to update the datatypes for PERP_AGE_GROUP, PERP_SEX, PERP_RACE, VIC_AGE_GROUP, VIC_SEX, VIC_RACE, and BORO. I'm updating them to factors so that I can see the count when when I use summary
+nypd_shooting_incidents_data <- nypd_shooting_incidents_data %>% mutate(PERP_AGE_GROUP = as.factor(PERP_AGE_GROUP),PERP_SEX = as.factor(PERP_SEX),PERP_RACE = as.factor(PERP_RACE),VIC_AGE_GROUP = as.factor(VIC_AGE_GROUP),VIC_SEX = as.factor(VIC_SEX),VIC_RACE = as.factor(VIC_RACE), BORO = as.factor(BORO))
+summary(nypd_shooting_incidents_data)
+
+# After looking at the updated summary, I decided to filter out the data points where the perpetrators age group was unknown, 1020, or 'Other'. We have a lot of data points where we don't have any useful information on the perpetrators and this will get rid a large deal of them
+nypd_shooting_incidents_data <- nypd_shooting_incidents_data %>% filter(PERP_AGE_GROUP %in% c("18-24","25-44","<18","45-64","65+"))
+
+# The date column is only useful if I later aggregate with it, so I decided to add in a column for the year
+nypd_shooting_incidents_data$YEAR <- as.numeric(format(nypd_shooting_incidents_data$OCCUR_DATE, "%Y"))
+```
+
+##Step 3: Visualizing and Analyzing Data
+
+```{r visualize_and_analyze_data}
+# Now that the data has been tidied, I want to explore different trends visually to gain more understanding over the dataset. So the first thing I wanted to do was see the trend of the shooting incidents over time. Here is a plot of that by year. I am glad to see that it has a downward trend. I'm worried about the number since Covid though. It's risen quite sharply. I wonder why. 
+
+incidents_by_year <- nypd_shooting_incidents_data %>% group_by(YEAR) %>% summarise(total_incidents = n())
+graph_incidents_by_year <- ggplot(incidents_by_year, aes(x = YEAR, y = total_incidents)) + geom_point()
+graph_incidents_by_year
+
+# Just like the number of shooting incidents, I was curious to see if deaths from the shooting incidents was also following the same patter by year. It's not too much of a surprise, but looks like its quite identical. I guess when there is a shooting, the perpetrator isn't exactly looking to not kill when shooting with a gun 
+
+deaths_by_year <- nypd_shooting_incidents_data %>% group_by(YEAR) %>% summarise(death_counts = sum(STATISTICAL_MURDER_FLAG == "TRUE"))
+graph_deaths_by_year <- ggplot(deaths_by_year, aes(x = YEAR, y = death_counts)) + geom_point()
+graph_deaths_by_year
+
+# Another thing I was curious about: Is there a relationship between the number of shooting incidents and deaths by neighborhood?
+incidents_deaths_by_boro <- nypd_shooting_incidents_data %>% group_by(BORO) %>% summarise(total_incidents = n(), death_counts = sum(STATISTICAL_MURDER_FLAG == "TRUE"), death_rate_per_incident = sum(STATISTICAL_MURDER_FLAG == "TRUE") / n())
+graph_incidents_deaths_by_boro <- ggplot(incidents_deaths_by_boro, aes(x = total_incidents, y = death_counts)) + geom_point()
+graph_death_to_incidents_by_boro <- ggplot(incidents_deaths_by_boro, aes(x = total_incidents, y = death_rate_per_incident)) + geom_point()
+graph_incidents_deaths_by_boro
+graph_death_to_incidents_by_boro
+# From the above graph, we can see that the number of deaths does go up relative to number of incidents. However, if we look at the deaths per incident by boro, it appears to be relatively flat, which suggests that there isn't anything unique about the shooting habits across boros. That means that there is a fairly linear relationship between incidents and deaths without any material confounding variables. 
+```
+
+
+## Step 3: Modeling Data
+```{r model_data}
+# During the earlier step when I was visualizing and analyzing different trends in the NYPD shooting incident data, I there is a fairly linear relationship between the number of incidents and the associated deaths as a result of the shootings across each boro in NY. I would like to create a model that fits appropriately to the dataset and predicts the number of deaths based on the number of incidents.
+model <- lm(death_counts ~ total_incidents, data = incidents_deaths_by_boro)
+summary(model)
+# Add predicted deaths to my historical data. Overall, the linear model does very well in fitting to the data with a very low variance. 
+incidents_deaths_by_boro_with_pred <- incidents_deaths_by_boro %>% mutate(pred = predict(model))
+pred_vs_actual <- incidents_deaths_by_boro_with_pred %>% ggplot() + geom_point(aes(x = total_incidents, y = death_counts), color = "blue") + geom_line(aes(x = total_incidents, y = pred), color = "red")+ geom_point(aes(x = total_incidents, y = pred), color = "red")
+pred_vs_actual
+```
+
+## Step 4: Conclusion & Identifying Bias
+
+```{r bias}
+# Overall, it is fair to say based on the data that the number of deaths is highly correlated to the number of shooting incidents and there are not many confounding variables like Boro that have any effect on that relationship. Of course, more research will have to be done to determine if the motive behind a shooting or timing of a shooting have any impact on mortality as well. As much as I wanted to remain unbiased, I did have some preconceived notions that were debunked through looking at this data. I had assumed ta the mortality rate when shot (death per shooting) would actually vary quite a bit based on Boro (neighborhood). The reason I had thought this was because I felt that the reason for a shooting incident would vary quite a bit depending on the neighborhood since some Boro's will have more gang related conflicts than others. However, that did not turn out to be the case.
+```
